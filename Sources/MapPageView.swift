@@ -1,33 +1,6 @@
 import UIKit
 import MapKit
 
-/// Ubin peta offline dari folder Documents/tiles/{z}/{x}/{y}.png
-final class LocalTileOverlay: MKTileOverlay {
-    private let root: URL
-
-    init(root: URL) {
-        self.root = root
-        super.init(urlTemplate: nil)
-        canReplaceMapContent = true
-        tileSize = CGSize(width: 256, height: 256)
-        minimumZ = 0
-        maximumZ = 19
-    }
-
-    override func url(forTilePath path: MKTileOverlayPath) -> URL {
-        return root.appendingPathComponent("\(path.z)/\(path.x)/\(path.y).png")
-    }
-
-    override func loadTile(at path: MKTileOverlayPath, result: @escaping (Data?, Error?) -> Void) {
-        let u = url(forTilePath: path)
-        if let d = try? Data(contentsOf: u) {
-            result(d, nil)
-        } else {
-            result(nil, NSError(domain: "gowes.tile", code: 404, userInfo: nil))
-        }
-    }
-}
-
 final class MapPageView: PageView, MKMapViewDelegate {
     private let map = MKMapView()
     private let banner = UIView()
@@ -36,21 +9,27 @@ final class MapPageView: PageView, MKMapViewDelegate {
     private let subLabel = UILabel()
     private let zoomIn = UIButton(type: .custom)
     private let zoomOut = UIButton(type: .custom)
+    private let speedCell = CellView(title: "Kecepatan km/jam", valueSize: 38)
+    private let hrCell = CellView(title: "Detak jantung bpm", valueSize: 38)
+    private let hrZone = UILabel()
     private let info = UIView()
     private let jejak = UILabel()
     private let titik = UILabel()
     private let mode = UILabel()
+    private var tileOverlay: MKTileOverlay?
     private var trailPoly: MKPolyline?
     private var startPin: MKPointAnnotation?
     private var lastTrailCount = -1
     private var lastTrailRefresh = Date.distantPast
-    private var hasLocalTiles = false
     private var didSetCamera = false
 
     override init(frame: CGRect) {
         super.init(frame: frame)
         build()
         applyTheme()
+        reloadTiles()
+        NotificationCenter.default.addObserver(self, selector: #selector(reloadTiles),
+                                               name: .packsChanged, object: nil)
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
@@ -61,29 +40,23 @@ final class MapPageView: PageView, MKMapViewDelegate {
         map.clipsToBounds = true
         map.delegate = self
         map.showsUserLocation = true
-        // Gerak peta dimatikan agar geser halaman tetap bisa dilakukan; peta selalu mengikuti posisi.
+        // Gerak peta dimatikan agar geser halaman tetap bisa; peta selalu mengikuti posisi.
         map.isScrollEnabled = false
         map.isZoomEnabled = false
         map.isRotateEnabled = false
         map.isPitchEnabled = false
         map.showsCompass = false
 
-        let tilesDir = RideEngine.documentsURL.appendingPathComponent("tiles")
-        if FileManager.default.fileExists(atPath: tilesDir.path) {
-            map.addOverlay(LocalTileOverlay(root: tilesDir), level: .aboveLabels)
-            hasLocalTiles = true
-        }
-
         banner.translatesAutoresizingMaskIntoConstraints = false
         banner.layer.cornerRadius = 10
         banner.layer.borderWidth = 0.5
-        arrow.font = .systemFont(ofSize: 30)
+        arrow.font = .systemFont(ofSize: 26)
         arrow.textAlignment = .center
         arrow.text = "📍"
-        distLabel.font = .monospacedDigitSystemFont(ofSize: 20, weight: .medium)
+        distLabel.font = .monospacedDigitSystemFont(ofSize: 18, weight: .medium)
         distLabel.text = "Siap merekam"
         subLabel.font = .systemFont(ofSize: 11)
-        subLabel.text = "Tekan Mulai untuk menandai titik awal"
+        subLabel.text = "Titik awal ditandai otomatis saat Mulai"
         subLabel.adjustsFontSizeToFitWidth = true
         subLabel.minimumScaleFactor = 0.7
         let texts = UIStackView(arrangedSubviews: [distLabel, subLabel])
@@ -104,12 +77,28 @@ final class MapPageView: PageView, MKMapViewDelegate {
             b.addTarget(self, action: sel, for: .touchUpInside)
         }
 
+        // Strip data di bawah peta
+        speedCell.valueLabel.text = "0.0"
+        hrCell.valueLabel.text = "--"
+        hrZone.font = .systemFont(ofSize: 11, weight: .bold)
+        hrZone.translatesAutoresizingMaskIntoConstraints = false
+        hrCell.addSubview(hrZone)
+        NSLayoutConstraint.activate([
+            hrZone.topAnchor.constraint(equalTo: hrCell.topAnchor, constant: 6),
+            hrZone.trailingAnchor.constraint(equalTo: hrCell.trailingAnchor, constant: -8)
+        ])
+        let strip = UIStackView(arrangedSubviews: [speedCell, hrCell])
+        strip.axis = .horizontal
+        strip.spacing = 6
+        strip.distribution = .fillEqually
+        strip.translatesAutoresizingMaskIntoConstraints = false
+
         info.translatesAutoresizingMaskIntoConstraints = false
         info.layer.cornerRadius = 10
-        for l in [jejak, titik, mode] { l.font = .systemFont(ofSize: 12) }
+        for l in [jejak, titik, mode] { l.font = .systemFont(ofSize: 11) }
         jejak.text = "Jejak 0.00 km"
         titik.text = "Titik 0"
-        mode.text = hasLocalTiles ? "Peta offline" : "Peta online"
+        mode.text = "Peta online"
         let infoStack = UIStackView(arrangedSubviews: [jejak, titik, mode])
         infoStack.axis = .horizontal
         infoStack.distribution = .equalSpacing
@@ -120,39 +109,45 @@ final class MapPageView: PageView, MKMapViewDelegate {
         addSubview(banner)
         addSubview(zoomIn)
         addSubview(zoomOut)
+        addSubview(strip)
         addSubview(info)
 
         NSLayoutConstraint.activate([
             info.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
             info.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8),
             info.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -4),
-            info.heightAnchor.constraint(equalToConstant: 40),
+            info.heightAnchor.constraint(equalToConstant: 26),
             infoStack.leadingAnchor.constraint(equalTo: info.leadingAnchor, constant: 10),
             infoStack.trailingAnchor.constraint(equalTo: info.trailingAnchor, constant: -10),
             infoStack.centerYAnchor.constraint(equalTo: info.centerYAnchor),
 
+            strip.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
+            strip.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8),
+            strip.bottomAnchor.constraint(equalTo: info.topAnchor, constant: -6),
+            strip.heightAnchor.constraint(equalToConstant: 72),
+
             map.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
             map.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8),
             map.topAnchor.constraint(equalTo: topAnchor, constant: 4),
-            map.bottomAnchor.constraint(equalTo: info.topAnchor, constant: -6),
+            map.bottomAnchor.constraint(equalTo: strip.topAnchor, constant: -6),
 
             banner.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 16),
             banner.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -16),
             banner.topAnchor.constraint(equalTo: topAnchor, constant: 12),
-            banner.heightAnchor.constraint(equalToConstant: 58),
+            banner.heightAnchor.constraint(equalToConstant: 52),
             h.leadingAnchor.constraint(equalTo: banner.leadingAnchor, constant: 10),
             h.trailingAnchor.constraint(equalTo: banner.trailingAnchor, constant: -10),
             h.centerYAnchor.constraint(equalTo: banner.centerYAnchor),
-            arrow.widthAnchor.constraint(equalToConstant: 36),
+            arrow.widthAnchor.constraint(equalToConstant: 34),
 
             zoomIn.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -16),
             zoomIn.topAnchor.constraint(equalTo: banner.bottomAnchor, constant: 6),
-            zoomIn.widthAnchor.constraint(equalToConstant: 36),
-            zoomIn.heightAnchor.constraint(equalToConstant: 36),
+            zoomIn.widthAnchor.constraint(equalToConstant: 34),
+            zoomIn.heightAnchor.constraint(equalToConstant: 34),
             zoomOut.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -16),
             zoomOut.topAnchor.constraint(equalTo: zoomIn.bottomAnchor, constant: 4),
-            zoomOut.widthAnchor.constraint(equalToConstant: 36),
-            zoomOut.heightAnchor.constraint(equalToConstant: 36)
+            zoomOut.widthAnchor.constraint(equalToConstant: 34),
+            zoomOut.heightAnchor.constraint(equalToConstant: 34)
         ])
     }
 
@@ -176,7 +171,28 @@ final class MapPageView: PageView, MKMapViewDelegate {
         map.setCamera(c, animated: true)
     }
 
+    /// Pasang ulang lapisan peta offline dari paket .mbtiles yang aktif.
+    @objc private func reloadTiles() {
+        if let o = tileOverlay {
+            map.removeOverlay(o)
+            tileOverlay = nil
+        }
+        let stores = MapPacks.activeStores()
+        if stores.isEmpty {
+            mode.text = "Peta online"
+            return
+        }
+        let minZ = stores.map { $0.0.minZoom }.min() ?? 0
+        let maxZ = stores.map { $0.0.maxZoom }.max() ?? 17
+        let o = MBTilesOverlay(stores: stores.map { $0.1 }, minZ: minZ, maxZ: maxZ)
+        map.insertOverlay(o, at: 0, level: .aboveLabels)
+        tileOverlay = o
+        mode.text = "Peta offline (\(stores.count))"
+    }
+
     override func applyTheme() {
+        speedCell.applyTheme()
+        hrCell.applyTheme()
         banner.backgroundColor = Theme.bg
         banner.layer.borderColor = Theme.line.cgColor
         arrow.textColor = Theme.fg
@@ -192,9 +208,19 @@ final class MapPageView: PageView, MKMapViewDelegate {
     }
 
     override func update(_ e: RideEngine) {
+        speedCell.valueLabel.text = String(format: "%.1f", e.speedKmh)
+        let hr = e.heartRate
+        hrCell.valueLabel.text = hr > 0 ? "\(hr)" : "--"
+        let z = hr > 0 ? zoneIndex(Double(hr)) : 0
+        hrZone.text = z > 0 ? "Z\(z)" : ""
+        let col = z > 0 ? Theme.zones[z - 1] : Theme.fg
+        hrCell.valueLabel.textColor = col
+        hrZone.textColor = col
+
         let now = Date()
+        let refreshEvery: TimeInterval = Settings.batterySaver ? 6 : 3
         if e.trail.count != lastTrailCount &&
-            (now.timeIntervalSince(lastTrailRefresh) >= 3 || e.trail.count < 2 || lastTrailCount > e.trail.count) {
+            (now.timeIntervalSince(lastTrailRefresh) >= refreshEvery || e.trail.count < 2 || lastTrailCount > e.trail.count) {
             refreshTrail(e.trail)
             lastTrailCount = e.trail.count
             lastTrailRefresh = now
@@ -209,10 +235,16 @@ final class MapPageView: PageView, MKMapViewDelegate {
             arrow.text = "↑"
             arrow.transform = CGAffineTransform(rotationAngle: CGFloat(brg - heading))
         } else {
-            arrow.text = "📍"
             arrow.transform = CGAffineTransform.identity
-            distLabel.text = "Siap merekam"
-            subLabel.text = "Tekan Mulai untuk menandai titik awal"
+            if e.waitingForStart {
+                arrow.text = "📡"
+                distLabel.text = "Menunggu GPS"
+                subLabel.text = "Titik awal ditandai otomatis dari GPS"
+            } else {
+                arrow.text = "📍"
+                distLabel.text = "Siap merekam"
+                subLabel.text = "Titik awal ditandai otomatis saat Mulai"
+            }
         }
         jejak.text = String(format: "Jejak %.2f km", e.distanceM / 1000)
         titik.text = "Titik \(e.trail.count)"

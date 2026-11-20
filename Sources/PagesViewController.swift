@@ -4,9 +4,9 @@ final class PagesViewController: UIViewController, UIScrollViewDelegate, RideEng
     private let engine = RideEngine()
 
     private let strip = UIView()
-    private let gpsLabel = UILabel()
+    private let clockLabel = UILabel()
     private let stateLabel = UILabel()
-    private let hrLabel = UILabel()
+    private let gpsLabel = UILabel()
 
     private let scroll = UIScrollView()
     private let mainPage = MainPageView()
@@ -20,17 +20,17 @@ final class PagesViewController: UIViewController, UIScrollViewDelegate, RideEng
     private let nameLabel = UILabel()
     private let names = ["Utama", "Peta jejak", "Tanjakan", "Ringkasan"]
 
-    // Panel Quick Status (ketuk bar atas)
-    private let panel = UIView()
-    private var panelLabels: [UILabel] = []
-    private let clockVal = UILabel()
-    private let gpsVal = UILabel()
-    private let hrVal = UILabel()
-    private let batVal = UILabel()
-    private let hrMaxVal = UILabel()
-    private let autoSwitch = UISwitch()
-    private let darkSwitch = UISwitch()
-    private let hrStepper = UIStepper()
+    private let clockFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "HH:mm"
+        return f
+    }()
+
+    private var appliedDark = Settings.dark
+    private var savedBrightness: CGFloat?
+    private var inactiveSince: Date?
+    private var warned20 = false
+    private var warned10 = false
 
     override var prefersStatusBarHidden: Bool { return true }
 
@@ -40,11 +40,20 @@ final class PagesViewController: UIViewController, UIScrollViewDelegate, RideEng
         buildStrip()
         buildFooter()
         buildScroll()
-        buildPanel()
 
         mainPage.onStartPause = { [weak self] in self?.engine.startPause() }
         mainPage.onLap = { [weak self] in self?.engine.lap() }
         mainPage.onStop = { [weak self] in self?.engine.finish() }
+
+        let nc = NotificationCenter.default
+        nc.addObserver(self, selector: #selector(settingsDidChange), name: .settingsChanged, object: nil)
+        nc.addObserver(self, selector: #selector(batteryChanged),
+                       name: UIDevice.batteryLevelDidChangeNotification, object: nil)
+        nc.addObserver(self, selector: #selector(restoreBrightness),
+                       name: UIApplication.willResignActiveNotification, object: nil)
+        let tap = UITapGestureRecognizer(target: self, action: #selector(screenTapped))
+        tap.cancelsTouchesInView = false
+        view.addGestureRecognizer(tap)
 
         applyTheme()
         engine.delegate = self
@@ -57,10 +66,12 @@ final class PagesViewController: UIViewController, UIScrollViewDelegate, RideEng
     private func buildStrip() {
         strip.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(strip)
-        for l in [gpsLabel, stateLabel, hrLabel] { l.font = .systemFont(ofSize: 11, weight: .medium) }
+        clockLabel.font = .monospacedDigitSystemFont(ofSize: 14, weight: .semibold)
+        stateLabel.font = .systemFont(ofSize: 11, weight: .medium)
+        gpsLabel.font = .systemFont(ofSize: 11, weight: .medium)
         stateLabel.textAlignment = .center
-        hrLabel.textAlignment = .right
-        let s = UIStackView(arrangedSubviews: [gpsLabel, stateLabel, hrLabel])
+        gpsLabel.textAlignment = .right
+        let s = UIStackView(arrangedSubviews: [clockLabel, stateLabel, gpsLabel])
         s.axis = .horizontal
         s.distribution = .fillEqually
         s.translatesAutoresizingMaskIntoConstraints = false
@@ -75,7 +86,8 @@ final class PagesViewController: UIViewController, UIScrollViewDelegate, RideEng
             s.trailingAnchor.constraint(equalTo: strip.trailingAnchor, constant: -12),
             s.centerYAnchor.constraint(equalTo: strip.centerYAnchor)
         ])
-        strip.addGestureRecognizer(UITapGestureRecognizer(target: self, action: #selector(togglePanel)))
+        // Ketuk bar atas = buka Pengaturan
+        strip.addGestureRecognizer(UITapGestureRecognizer(target: self, action: #selector(openSettings)))
     }
 
     private func buildFooter() {
@@ -118,69 +130,6 @@ final class PagesViewController: UIViewController, UIScrollViewDelegate, RideEng
         for p in pages { scroll.addSubview(p) }
     }
 
-    private func row(_ title: String, _ trailing: UIView) -> UIView {
-        let l = UILabel()
-        l.text = title
-        l.font = .systemFont(ofSize: 14)
-        panelLabels.append(l)
-        let s = UIStackView(arrangedSubviews: [l, trailing])
-        s.axis = .horizontal
-        s.distribution = .equalSpacing
-        s.alignment = .center
-        return s
-    }
-
-    private func buildPanel() {
-        panel.translatesAutoresizingMaskIntoConstraints = false
-        panel.isHidden = true
-        panel.layer.cornerRadius = 12
-        panel.layer.borderWidth = 0.5
-
-        for l in [clockVal, gpsVal, hrVal, batVal, hrMaxVal] {
-            l.font = .systemFont(ofSize: 14)
-            l.textAlignment = .right
-            panelLabels.append(l)
-        }
-        hrStepper.minimumValue = 140
-        hrStepper.maximumValue = 220
-        hrStepper.stepValue = 1
-        hrStepper.value = Double(Settings.hrMax)
-        hrStepper.addTarget(self, action: #selector(stepperChanged), for: .valueChanged)
-        autoSwitch.isOn = Settings.autoPause
-        autoSwitch.addTarget(self, action: #selector(autoChanged), for: .valueChanged)
-        darkSwitch.isOn = Settings.dark
-        darkSwitch.addTarget(self, action: #selector(darkChanged), for: .valueChanged)
-
-        let hrBox = UIStackView(arrangedSubviews: [hrMaxVal, hrStepper])
-        hrBox.axis = .horizontal
-        hrBox.spacing = 8
-        hrBox.alignment = .center
-
-        let rows = UIStackView(arrangedSubviews: [
-            row("Jam", clockVal),
-            row("GPS", gpsVal),
-            row("Sensor HR", hrVal),
-            row("Baterai", batVal),
-            row("HR maks", hrBox),
-            row("Jeda otomatis", autoSwitch),
-            row("Tema gelap", darkSwitch)
-        ])
-        rows.axis = .vertical
-        rows.spacing = 10
-        rows.translatesAutoresizingMaskIntoConstraints = false
-        panel.addSubview(rows)
-        view.addSubview(panel)
-        NSLayoutConstraint.activate([
-            panel.topAnchor.constraint(equalTo: strip.bottomAnchor),
-            panel.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 8),
-            panel.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -8),
-            rows.topAnchor.constraint(equalTo: panel.topAnchor, constant: 12),
-            rows.bottomAnchor.constraint(equalTo: panel.bottomAnchor, constant: -12),
-            rows.leadingAnchor.constraint(equalTo: panel.leadingAnchor, constant: 14),
-            rows.trailingAnchor.constraint(equalTo: panel.trailingAnchor, constant: -14)
-        ])
-    }
-
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
         let w = scroll.bounds.width
@@ -193,33 +142,76 @@ final class PagesViewController: UIViewController, UIScrollViewDelegate, RideEng
 
     // MARK: - Aksi
 
-    @objc private func togglePanel() {
-        panel.isHidden = !panel.isHidden
-        if !panel.isHidden { updatePanel(engine) }
+    @objc private func openSettings() {
+        restoreBrightness()
+        let vc = SettingsViewController(engine: engine)
+        let nav = UINavigationController(rootViewController: vc)
+        present(nav, animated: true, completion: nil)
     }
 
-    @objc private func stepperChanged() {
-        Settings.hrMax = Int(hrStepper.value)
-        hrMaxVal.text = "\(Settings.hrMax)"
-    }
-
-    @objc private func autoChanged() { Settings.autoPause = autoSwitch.isOn }
-
-    @objc private func darkChanged() {
-        Settings.dark = darkSwitch.isOn
+    @objc private func settingsDidChange() {
+        appliedDark = Settings.dark
         applyTheme()
         engineDidUpdate(engine)
     }
 
     private func applyTheme() {
         view.backgroundColor = Theme.bg
-        for l in [gpsLabel, hrLabel, nameLabel] { l.textColor = Theme.muted }
+        clockLabel.textColor = Theme.fg
+        gpsLabel.textColor = Theme.muted
+        nameLabel.textColor = Theme.muted
         dots.pageIndicatorTintColor = Theme.line
         dots.currentPageIndicatorTintColor = Theme.fg
-        panel.backgroundColor = Theme.bg
-        panel.layer.borderColor = Theme.line.cgColor
-        for l in panelLabels { l.textColor = Theme.fg }
         pages.forEach { $0.applyTheme() }
+    }
+
+    // MARK: - Redup layar dan baterai
+
+    private func updateDim(_ e: RideEngine) {
+        let paused = (e.state == .paused || e.state == .autoPaused)
+        if Settings.autoDim && paused {
+            if inactiveSince == nil { inactiveSince = Date() }
+            if savedBrightness == nil, let t = inactiveSince, Date().timeIntervalSince(t) > 10 {
+                savedBrightness = UIScreen.main.brightness
+                UIScreen.main.brightness = 0.15
+            }
+        } else {
+            inactiveSince = nil
+            restoreBrightness()
+        }
+    }
+
+    @objc private func restoreBrightness() {
+        if let b = savedBrightness {
+            UIScreen.main.brightness = b
+            savedBrightness = nil
+        }
+    }
+
+    /// Ketuk layar saat redup: terang lagi, redup ulang setelah 10 detik.
+    @objc private func screenTapped() {
+        if savedBrightness != nil {
+            restoreBrightness()
+            inactiveSince = Date()
+        }
+    }
+
+    @objc private func batteryChanged() {
+        guard Settings.batteryWarn else { return }
+        let lvl = UIDevice.current.batteryLevel
+        guard lvl >= 0, UIDevice.current.batteryState != .charging else { return }
+        if lvl > 0.25 {
+            warned20 = false
+            warned10 = false
+        }
+        if lvl <= 0.10 && !warned10 {
+            warned10 = true
+            warned20 = true
+            engine.notice("Baterai 10%")
+        } else if lvl <= 0.20 && !warned20 {
+            warned20 = true
+            engine.notice("Baterai 20%")
+        }
     }
 
     // MARK: - Scroll
@@ -237,12 +229,16 @@ final class PagesViewController: UIViewController, UIScrollViewDelegate, RideEng
     // MARK: - RideEngineDelegate
 
     func engineDidUpdate(_ e: RideEngine) {
+        if Settings.dark != appliedDark {
+            appliedDark = Settings.dark
+            applyTheme()
+        }
+        clockLabel.text = clockFormatter.string(from: Date())
         if let a = e.gpsAccuracy {
             gpsLabel.text = "GPS ±\(Int(a)) m"
         } else {
             gpsLabel.text = "GPS: mencari..."
         }
-        hrLabel.text = e.hrStatus
 
         var txt = "Siap"
         var col = Theme.muted
@@ -261,17 +257,6 @@ final class PagesViewController: UIViewController, UIScrollViewDelegate, RideEng
         stateLabel.textColor = col
 
         pages.forEach { $0.update(e) }
-        if !panel.isHidden { updatePanel(e) }
-    }
-
-    private func updatePanel(_ e: RideEngine) {
-        let df = DateFormatter()
-        df.dateFormat = "HH:mm"
-        clockVal.text = df.string(from: Date())
-        if let a = e.gpsAccuracy { gpsVal.text = "±\(Int(a)) m" } else { gpsVal.text = "mencari..." }
-        hrVal.text = e.hrStatus.replacingOccurrences(of: "HR: ", with: "")
-        let lvl = UIDevice.current.batteryLevel
-        batVal.text = lvl >= 0 ? "\(Int(lvl * 100))%" : "--"
-        hrMaxVal.text = "\(Settings.hrMax)"
+        updateDim(e)
     }
 }

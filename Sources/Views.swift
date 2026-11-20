@@ -73,8 +73,8 @@ final class BarGraphView: UIView {
         ctx.setLineWidth(0.5)
         ctx.setStrokeColor(Theme.line.cgColor)
         ctx.setLineDash(phase: 0, lengths: [2, 3])
-        for i in 6...9 {
-            let y = h - CGFloat((hrMax * Double(i) / 10 - lo) / (hrMax - lo)) * h
+        for b in Settings.zoneBounds {
+            let y = h - CGFloat((hrMax * b - lo) / (hrMax - lo)) * h
             ctx.move(to: CGPoint(x: 0, y: y))
             ctx.addLine(to: CGPoint(x: w, y: y))
             ctx.strokePath()

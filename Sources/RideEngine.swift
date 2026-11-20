@@ -61,6 +61,8 @@ final class RideEngine: NSObject, CLLocationManagerDelegate, CBCentralManagerDel
     private(set) var hrBars: [Double] = []
     private(set) var profile: [(ele: Double, grade: Double)] = []
 
+    /// Sudah Mulai tapi titik awal belum ditandai (menunggu sinyal GPS yang cukup akurat).
+    var waitingForStart: Bool { return state != .idle && startPending }
     var avgKmh: Double { return elapsed > 0 ? (distanceM / 1000) / (elapsed / 3600) : 0 }
     var currentBar: Double? { return barCount > 0 ? Double(barSum) / Double(barCount) : nil }
 
@@ -76,6 +78,9 @@ final class RideEngine: NSObject, CLLocationManagerDelegate, CBCentralManagerDel
     private var lastFix: Date?
     private var lastRecorded: CLLocation?
     private var still = 0
+    private var tickCount = 0
+    private var startPending = false
+    private var startRequestedAt = Date()
     private var autosaveCounter = 0
     private var barSum = 0
     private var barCount = 0
@@ -92,14 +97,34 @@ final class RideEngine: NSObject, CLLocationManagerDelegate, CBCentralManagerDel
     override init() {
         super.init()
         lm.delegate = self
-        lm.desiredAccuracy = kCLLocationAccuracyBestForNavigation
         lm.activityType = .fitness
-        lm.distanceFilter = kCLDistanceFilterNone
         lm.allowsBackgroundLocationUpdates = true
         lm.pausesLocationUpdatesAutomatically = false
+        applyPowerMode()
         central = CBCentralManager(delegate: self, queue: nil)
         NotificationCenter.default.addObserver(self, selector: #selector(appWillResign),
                                                name: UIApplication.willResignActiveNotification, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(settingsChanged),
+                                               name: .settingsChanged, object: nil)
+    }
+
+    @objc private func settingsChanged() { applyPowerMode() }
+
+    /// Mode hemat baterai: akurasi GPS standar dan filter jarak 3 m.
+    private func applyPowerMode() {
+        if Settings.batterySaver {
+            lm.desiredAccuracy = kCLLocationAccuracyBest
+            lm.distanceFilter = 3
+        } else {
+            lm.desiredAccuracy = kCLLocationAccuracyBestForNavigation
+            lm.distanceFilter = kCLDistanceFilterNone
+        }
+    }
+
+    /// Tampilkan pesan singkat di bar atas.
+    func notice(_ text: String) {
+        flash(text)
+        delegate?.engineDidUpdate(self)
     }
 
     func begin() {
@@ -120,7 +145,12 @@ final class RideEngine: NSObject, CLLocationManagerDelegate, CBCentralManagerDel
             resetRide()
             state = .running
             lastTick = Date()
-            if let l = currentLocation { record(l) }
+            startRequestedAt = Date()
+            startPending = true
+            if let l = currentLocation, let t = lastFix,
+               Date().timeIntervalSince(t) < 5, l.horizontalAccuracy <= 25 {
+                markStart(l)
+            }
         case .running:
             state = .paused
         case .paused, .autoPaused:
@@ -173,6 +203,13 @@ final class RideEngine: NSObject, CLLocationManagerDelegate, CBCentralManagerDel
         return url
     }
 
+    /// Titik awal otomatis dari pembacaan GPS pertama yang cukup akurat setelah Mulai.
+    private func markStart(_ l: CLLocation) {
+        startPending = false
+        record(l)
+        flash("Titik awal tertandai")
+    }
+
     private func resume() {
         state = .running
         still = 0
@@ -188,7 +225,7 @@ final class RideEngine: NSObject, CLLocationManagerDelegate, CBCentralManagerDel
         zoneSeconds = [Double](repeating: 0, count: 5)
         laps = []; points = []; trail = []; profile = []
         lapStartDist = 0; lapStartElapsed = 0; lapHrSum = 0; lapHrCount = 0
-        lastRecorded = nil; altRef = nil; still = 0; autosaveCounter = 0
+        lastRecorded = nil; altRef = nil; still = 0; autosaveCounter = 0; startPending = false
         profileAcc = 0; lastProfileEle = nil
     }
 
@@ -248,7 +285,8 @@ final class RideEngine: NSObject, CLLocationManagerDelegate, CBCentralManagerDel
                 barCount = 0
             }
         }
-        delegate?.engineDidUpdate(self)
+        tickCount += 1
+        if !Settings.batterySaver || tickCount % 2 == 0 { delegate?.engineDidUpdate(self) }
     }
 
     // MARK: - GPS
@@ -264,7 +302,13 @@ final class RideEngine: NSObject, CLLocationManagerDelegate, CBCentralManagerDel
             if v < 1.5 { v = 0 }
             speedKmh = v
             updateAltitude(l)
-            if state == .running { record(l) }
+            if startPending && state != .idle {
+                if l.horizontalAccuracy <= 25 || Date().timeIntervalSince(startRequestedAt) > 15 {
+                    markStart(l)
+                }
+            } else if state == .running {
+                record(l)
+            }
         }
     }
 
@@ -290,9 +334,13 @@ final class RideEngine: NSObject, CLLocationManagerDelegate, CBCentralManagerDel
         maxSpeedKmh = max(maxSpeedKmh, speedKmh)
         if let last = lastRecorded {
             let d = l.distance(from: last)
-            if d < 5 { return }
+            if d < Settings.minPointM { return }
             distanceM += d
             profileAcc += d
+            if Settings.autoLapKm > 0, state == .running,
+               distanceM - lapStartDist >= Double(Settings.autoLapKm) * 1000 {
+                lap()
+            }
         }
         lastRecorded = l
         points.append(TrackPoint(lat: l.coordinate.latitude, lon: l.coordinate.longitude,

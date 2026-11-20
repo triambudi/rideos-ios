@@ -10,26 +10,90 @@ extension UIColor {
     }
 }
 
-/// Pengaturan sederhana (disimpan di UserDefaults). Diubah lewat panel Quick Status (ketuk bar atas).
+extension Notification.Name {
+    static let settingsChanged = Notification.Name("gowes.settingsChanged")
+    static let packsChanged = Notification.Name("gowes.packsChanged")
+}
+
+/// Pengaturan (disimpan di UserDefaults). Diubah lewat layar Pengaturan (ketuk bar atas).
 enum Settings {
+    private static let d = UserDefaults.standard
+
     static var hrMax: Int {
         get {
-            let v = UserDefaults.standard.integer(forKey: "hrMax")
+            let v = d.integer(forKey: "hrMax")
             return v > 0 ? v : 190
         }
-        set { UserDefaults.standard.set(newValue, forKey: "hrMax") }
+        set { d.set(newValue, forKey: "hrMax") }
     }
     static var autoPause: Bool {
-        get { return (UserDefaults.standard.object(forKey: "autoPause") as? Bool) ?? true }
-        set { UserDefaults.standard.set(newValue, forKey: "autoPause") }
+        get { return (d.object(forKey: "autoPause") as? Bool) ?? true }
+        set { d.set(newValue, forKey: "autoPause") }
+    }
+    static var pauseBelowKmh: Double {
+        get { return (d.object(forKey: "pauseBelow") as? Double) ?? 2.0 }
+        set { d.set(newValue, forKey: "pauseBelow") }
+    }
+    static var resumeAboveKmh: Double {
+        get { return max((d.object(forKey: "resumeAbove") as? Double) ?? 3.0, pauseBelowKmh + 0.5) }
+        set { d.set(newValue, forKey: "resumeAbove") }
+    }
+    static var pauseAfterSeconds: Int {
+        get { return (d.object(forKey: "pauseAfter") as? Int) ?? 3 }
+        set { d.set(newValue, forKey: "pauseAfter") }
+    }
+    static var minPointM: Double {
+        get { return (d.object(forKey: "minPointM") as? Double) ?? 5.0 }
+        set { d.set(newValue, forKey: "minPointM") }
+    }
+    /// 0 = mati
+    static var autoLapKm: Int {
+        get { return (d.object(forKey: "autoLapKm") as? Int) ?? 0 }
+        set { d.set(newValue, forKey: "autoLapKm") }
+    }
+    /// Batas awal zona 2, 3, 4, 5 sebagai pecahan HR maks.
+    static var zoneBounds: [Double] {
+        get {
+            if let a = d.array(forKey: "zoneBounds") as? [Double], a.count == 4 { return a }
+            return [0.6, 0.7, 0.8, 0.9]
+        }
+        set { d.set(newValue, forKey: "zoneBounds") }
+    }
+    static func setZoneBound(_ i: Int, _ v: Double) {
+        var b = zoneBounds
+        b[i] = v
+        if i < 3 { for j in (i + 1)..<4 { b[j] = max(b[j], b[j - 1] + 0.01) } }
+        if i > 0 { for j in stride(from: i - 1, through: 0, by: -1) { b[j] = min(b[j], b[j + 1] - 0.01) } }
+        zoneBounds = b
+    }
+    static func resetZones() { d.removeObject(forKey: "zoneBounds") }
+
+    static var batterySaver: Bool {
+        get { return d.bool(forKey: "batterySaver") }
+        set { d.set(newValue, forKey: "batterySaver") }
+    }
+    static var autoDim: Bool {
+        get { return d.bool(forKey: "autoDim") }
+        set { d.set(newValue, forKey: "autoDim") }
+    }
+    static var batteryWarn: Bool {
+        get { return (d.object(forKey: "batteryWarn") as? Bool) ?? true }
+        set { d.set(newValue, forKey: "batteryWarn") }
+    }
+    /// 0 = terang, 1 = gelap, 2 = otomatis (gelap jam 18.00-06.00)
+    static var themeMode: Int {
+        get { return d.integer(forKey: "themeMode") }
+        set { d.set(newValue, forKey: "themeMode") }
     }
     static var dark: Bool {
-        get { return UserDefaults.standard.bool(forKey: "dark") }
-        set { UserDefaults.standard.set(newValue, forKey: "dark") }
+        switch themeMode {
+        case 1: return true
+        case 2:
+            let h = Calendar.current.component(.hour, from: Date())
+            return h < 6 || h >= 18
+        default: return false
+        }
     }
-    static let pauseBelowKmh = 2.0
-    static let resumeAboveKmh = 3.0
-    static let pauseAfterSeconds = 3
 }
 
 enum Theme {
@@ -52,10 +116,11 @@ enum Theme {
 /// Zona HR 1...5 berdasarkan persen dari HR maks.
 func zoneIndex(_ hr: Double) -> Int {
     let r = hr / Double(Settings.hrMax)
-    if r < 0.6 { return 1 }
-    if r < 0.7 { return 2 }
-    if r < 0.8 { return 3 }
-    if r < 0.9 { return 4 }
+    let b = Settings.zoneBounds
+    if r < b[0] { return 1 }
+    if r < b[1] { return 2 }
+    if r < b[2] { return 3 }
+    if r < b[3] { return 4 }
     return 5
 }
 
