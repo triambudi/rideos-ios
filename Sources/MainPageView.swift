@@ -5,7 +5,7 @@ final class MainPageView: PageView {
     var onLap: (() -> Void)?
     var onStop: (() -> Void)?
 
-    private let speed = CellView(title: "Kecepatan km/jam", valueSize: 64)
+    private let speed = CellView(title: "Kecepatan km/jam", valueSize: 100)
     private let maxLabel = UILabel()
     private let hrCell = UIView()
     private let hrTitle = UILabel()
@@ -30,7 +30,7 @@ final class MainPageView: PageView {
 
     private func build() {
         // Kotak kecepatan + label maks
-        speed.valueLabel.font = .monospacedDigitSystemFont(ofSize: 64, weight: .bold)
+        speed.valueLabel.font = .monospacedDigitSystemFont(ofSize: 100, weight: .bold)
         speed.valueLabel.text = "0.0"
         maxLabel.font = .systemFont(ofSize: 11, weight: .medium)
         maxLabel.translatesAutoresizingMaskIntoConstraints = false
@@ -45,7 +45,9 @@ final class MainPageView: PageView {
         hrTitle.text = "Detak jantung bpm"
         hrTitle.font = .systemFont(ofSize: 11, weight: .medium)
         hrZone.font = .systemFont(ofSize: 11, weight: .bold)
-        hrValue.font = .monospacedDigitSystemFont(ofSize: 36, weight: .medium)
+        hrValue.font = .monospacedDigitSystemFont(ofSize: 34, weight: .medium)
+        hrValue.adjustsFontSizeToFitWidth = true
+        hrValue.minimumScaleFactor = 0.6
         hrValue.text = "--"
         let subs: [UIView] = [hrTitle, hrZone, hrValue, graph]
         for v in subs {
@@ -57,12 +59,13 @@ final class MainPageView: PageView {
             hrTitle.leadingAnchor.constraint(equalTo: hrCell.leadingAnchor, constant: 8),
             hrZone.topAnchor.constraint(equalTo: hrCell.topAnchor, constant: 8),
             hrZone.trailingAnchor.constraint(equalTo: hrCell.trailingAnchor, constant: -8),
-            hrValue.topAnchor.constraint(equalTo: hrTitle.bottomAnchor, constant: 0),
+            hrValue.topAnchor.constraint(equalTo: hrTitle.bottomAnchor, constant: 4),
             hrValue.leadingAnchor.constraint(equalTo: hrCell.leadingAnchor, constant: 8),
-            graph.leadingAnchor.constraint(equalTo: hrCell.leadingAnchor, constant: 8),
+            hrValue.widthAnchor.constraint(equalToConstant: 76),
+            graph.leadingAnchor.constraint(equalTo: hrValue.trailingAnchor, constant: 8),
             graph.trailingAnchor.constraint(equalTo: hrCell.trailingAnchor, constant: -8),
-            graph.bottomAnchor.constraint(equalTo: hrCell.bottomAnchor, constant: -6),
-            graph.heightAnchor.constraint(equalToConstant: 64)
+            graph.topAnchor.constraint(equalTo: hrTitle.bottomAnchor, constant: 4),
+            graph.bottomAnchor.constraint(equalTo: hrCell.bottomAnchor, constant: -8)
         ])
 
         // Grid 2x2
@@ -101,8 +104,8 @@ final class MainPageView: PageView {
             main.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8),
             main.topAnchor.constraint(equalTo: topAnchor, constant: 4),
             main.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -4),
-            speed.heightAnchor.constraint(equalToConstant: 100),
-            hrCell.heightAnchor.constraint(equalToConstant: 140),
+            speed.heightAnchor.constraint(equalToConstant: 160),
+            hrCell.heightAnchor.constraint(equalToConstant: 84),
             btns.heightAnchor.constraint(equalToConstant: 48)
         ])
     }

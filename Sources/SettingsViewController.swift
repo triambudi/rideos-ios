@@ -98,6 +98,7 @@ final class SettingsViewController: UITableViewController {
         if packs.isEmpty { mapRows.append(Row(title: "Belum ada paket peta", kind: .info("kosong"))) }
         for p in packs { mapRows.append(Row(title: p.title, kind: .pack(p))) }
         mapRows.append(Row(title: "Muat ulang daftar paket", kind: .action(nil, { [weak self] in self?.reloadPacks() })))
+        mapRows.append(Row(title: "Diagnosa peta", kind: .action(nil, { [weak self] in self?.showDiagnostics() })))
         s.append(Section(
             title: "Peta offline",
             footer: "Salin file .mbtiles ke folder Documents/maps lewat kabel atau SSH, lalu muat ulang. Saklar mengaktifkan paket, geser ke kiri untuk menghapus.",
@@ -201,6 +202,12 @@ final class SettingsViewController: UITableViewController {
         tableView.reloadData()
     }
 
+    private func showDiagnostics() {
+        let a = UIAlertController(title: "Diagnosa peta", message: MapPacks.diagnosticText(), preferredStyle: .alert)
+        a.addAction(UIAlertAction(title: "Tutup", style: .cancel, handler: nil))
+        present(a, animated: true, completion: nil)
+    }
+
     private func reloadSoon() {
         DispatchQueue.main.async { [weak self] in
             self?.rebuild()
@@ -268,7 +275,11 @@ final class SettingsViewController: UITableViewController {
             cell.detailTextLabel?.text = detail
             cell.selectionStyle = .default
         case .pack(let p):
-            cell.detailTextLabel?.text = "\(MapPacks.sizeText(p.size)), z\(p.minZoom)-\(p.maxZoom)"
+            if let st = p.status {
+                cell.detailTextLabel?.text = st
+            } else {
+                cell.detailTextLabel?.text = "\(MapPacks.sizeText(p.size)), z\(p.minZoom)-\(p.maxZoom)"
+            }
             let sw = ActionSwitch()
             sw.isOn = MapPacks.isActive(p)
             sw.onChange = { on in MapPacks.setActive(p, on) }

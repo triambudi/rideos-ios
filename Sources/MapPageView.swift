@@ -22,6 +22,10 @@ final class MapPageView: PageView, MKMapViewDelegate {
     private var lastTrailCount = -1
     private var lastTrailRefresh = Date.distantPast
     private var didSetCamera = false
+    private var packBounds: [[Double]] = []
+    private var packCount = 0
+    private var centeredOnPack = false
+    private var followStarted = false
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -178,6 +182,9 @@ final class MapPageView: PageView, MKMapViewDelegate {
             tileOverlay = nil
         }
         let stores = MapPacks.activeStores()
+        packBounds = stores.compactMap { $0.1.bounds() }
+        packCount = stores.count
+        centeredOnPack = false
         if stores.isEmpty {
             mode.text = "Peta online"
             return
@@ -207,7 +214,35 @@ final class MapPageView: PageView, MKMapViewDelegate {
         }
     }
 
+    /// Sebelum ada GPS: tampilkan area paket peta. Setelah GPS ada: ikuti posisi.
+    private func updateCamera(_ e: RideEngine) {
+        if let loc = e.currentLocation {
+            if !followStarted {
+                followStarted = true
+                map.setUserTrackingMode(.follow, animated: false)
+                if let c = map.camera.copy() as? MKMapCamera {
+                    c.altitude = 3000
+                    map.setCamera(c, animated: false)
+                }
+            }
+            if tileOverlay != nil {
+                let c = loc.coordinate
+                let inside = packBounds.isEmpty || packBounds.contains {
+                    c.longitude >= $0[0] && c.latitude >= $0[1] && c.longitude <= $0[2] && c.latitude <= $0[3]
+                }
+                mode.text = inside ? "Peta offline (\(packCount))" : "Di luar area peta"
+            }
+        } else if !centeredOnPack, let b = packBounds.first {
+            centeredOnPack = true
+            followStarted = false
+            map.setUserTrackingMode(.none, animated: false)
+            let center = CLLocationCoordinate2D(latitude: (b[1] + b[3]) / 2, longitude: (b[0] + b[2]) / 2)
+            map.setCamera(MKMapCamera(lookingAtCenter: center, fromDistance: 25000, pitch: 0, heading: 0), animated: false)
+        }
+    }
+
     override func update(_ e: RideEngine) {
+        updateCamera(e)
         speedCell.valueLabel.text = String(format: "%.1f", e.speedKmh)
         let hr = e.heartRate
         hrCell.valueLabel.text = hr > 0 ? "\(hr)" : "--"

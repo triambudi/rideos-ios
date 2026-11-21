@@ -8,8 +8,15 @@ jobs:
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
-      - name: Periksa Xcode
-        run: xcodebuild -version
+      - name: Pilih Xcode
+        run: |
+          for v in 16.4 16.3 16.2 16.1 16.0 15.4; do
+            if [ -d "/Applications/Xcode_$v.app" ]; then
+              sudo xcode-select -s "/Applications/Xcode_$v.app"
+              break
+            fi
+          done
+          xcodebuild -version
       - name: Pasang XcodeGen dan ldid
         run: brew install xcodegen ldid
       - name: Generate project
